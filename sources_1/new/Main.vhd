@@ -42,77 +42,68 @@ entity Main is
 end Main;
 
 architecture Behavioral of Main is
-  -- Creates a simple array of bytes, 128 bytes total:
-  type Bin_array is array (0 to 100) of std_logic_vector(11 downto 0);
 
+  signal in_pulse_width           : integer := 5; -- количество импульсов клока, больше которого должен быть входной сигнал
+  signal prescaler                : std_logic_vector(3  downto 0) ;
+  --signal reset_bin_flag           : std_logic := '0';
+  --signal out_vector               : std_logic_vector(11 downto 0) := (others=>'0');
+  signal Count_flag               : std_logic; --флаг, разрешающий счёт, если время работы бина меньше лимита
+  signal in_pulse_width_is_enough : std_logic; -- флаг, выставляется в 1, если входной импульс в 1 дольше, чем in_pulse_width клоков
+  signal One_bin_data             : std_logic_vector(11 downto 0) := (others=>'0');
+  signal Bin_number               : integer := 0; --std_logic_vector(11 downto 0) := (others=>'0');
+  signal One_bin_time             : std_logic_vector(22 downto 0) := (others=>'0'); --при клоке в 500МГц получается 625к счётчиков на 1 бин
+  signal Amount_of_bins           : integer := 30; -- std_logic_vector(7 downto 0) := x"A0"; --x"FA0"
+  signal One_bin_time_limit       : std_logic_vector(7 downto 0) := x"A0"; --А вообще здесь должно быть x"98968"
+  type Bin_array is array (0 to Amount_of_bins) of std_logic_vector(11 downto 0);
   signal Out_Data           : Bin_array;
-  -- signal out_bit_vector     : bit_vector      (3999 downto 0) ;
-  -- signal out_data_vector    : std_logic_vector (3999 downto 0) := (others=>'0');
-  signal prescaler          : std_logic_vector(3  downto 0) ;
-  signal reset_bin_flag         : std_logic := '0';
-  signal out_vector         : std_logic_vector(11 downto 0) := (others=>'0');
-  signal Count_flag         : std_logic;
-  signal prescaler_wait_flag: std_logic;
-  signal One_bin_data       : std_logic_vector(11 downto 0) := (others=>'0');
-  signal Bin_number         : integer := 0; --std_logic_vector(11 downto 0) := (others=>'0');
-  signal One_bin_time       : std_logic_vector(22 downto 0) := (others=>'0'); --при клоке в 500МГц получается 625к счётчиков на 1 бин
-  signal Amount_of_bins     : integer := 100; -- std_logic_vector(7 downto 0) := x"A0"; --x"FA0"
-  signal One_bin_time_limit : std_logic_vector(7 downto 0) := x"A0"; --А вообще здесь должно быть x"98968"
 begin
 --Amount_of_bins <= x"FA0";
 --process switch on Count_flag if time of work of one bin is lesser than One_bin_time_limit
   One_bin_time_counter : process( clk, One_bin_time, Bin_number, One_bin_time_limit, Out_Data)
   begin
-
+-- Циклический перебор номеров бина
   if (One_bin_time >= One_bin_time_limit) then
       Bin_number <= Bin_number + 1;
       if Bin_number >= Amount_of_bins then
       Bin_number <= 0;
     end if;
       --change_bin_flag <= not change_bin_flag;
+      --сброс зеачений посчитанного времени работы бина и установка разрешающего счёт флага в 0, если время работы бина больше заданного лимита
       One_bin_time <= (others=>'0');
       Count_flag <= '0';
-  elsif rising_edge(clk) and One_bin_time <= One_bin_time_limit then
-      One_bin_time <= One_bin_time + "1";
-      Count_flag <= '1';
+      --Инкрементация счётчика времени работы бина, если время работы одного бина меньше лимита  и флаг счёта в 1
+    elsif rising_edge(clk) and One_bin_time <= One_bin_time_limit then
+        One_bin_time <= One_bin_time + "1";
+        Count_flag <= '1';
   end if;
-  end process One_bin_time_counter; 
+  end process One_bin_time_counter;
 
--- --
--- Prescaler_count: process( Beam_counter1, clk, prescaler_wait_flag)
---   begin
---
---     if  Beam_counter1='0' and rising_edge(clk) then
---       prescaler_wait_flag <= '1';
---       if Beam_counter1='1' then
---       --  prescaler <= (others=>'0');
---         prescaler_wait_flag <= '0';
---       end if;
---     end if;
---
---     if clk'event and clk='1' and prescaler_wait_flag = '0' then
---       prescaler <= prescaler + '1';
---     end if;
---   end process Prescaler_count;
-
-One_bin_counter:  process( Beam_counter1, clk, One_bin_data, Count_flag, prescaler)
-begin
-  if Count_flag  = '0' then
-  One_bin_data <= (others=>'0');
-  elsif Beam_counter1 = '1' and rising_edge(clk)  then
-        One_bin_data <= One_bin_data + "1";
-    prescaler <= (others=>'0');
+-- --создание синхронного счётчика из несинхронного - завышаем частоту прескейлера, при достаточном количестве импульсов на входе, считаем, что произошло срабатывание входа синхронно с клоком
+Prescaler_count: process( Beam_counter1, clk, in_pulse_width_is_enough)
+  begin
+if rising_edge(clk) then
+    if Beam_counter1 = '0' then -- сброс прескейлера, если на входной ноге 0
+    prescaler <= (others=>'0'); -- прескейлер не обнуляется, если импульс произошёл во время работы предыдущего бина. В этом случае импульс считается сработавшим в следующем бине. Надо обдумать.
+        elsif Beam_counter1='1' then
+        prescaler <= prescaler + '1';
+    end if;
 end if;
+  end process Prescaler_count;
+--Запись данных о входных срабатываниях в один 12битный счётчик
+One_bin_counter:  process( Beam_counter1, clk, Count_flag, prescaler)
+begin
+  if rising_edge(clk) then
+    if Count_flag = '0' then
+    One_bin_data <= (others=>'0');
+      elsif prescaler = in_pulse_width then
+           One_bin_data <= One_bin_data + "1";
+    end if;
+  end if;
 end process One_bin_counter;
 
-
-  write_to_array: process( clk, One_bin_data, Count_flag, Amount_of_bins, Bin_number)
-
-  --variable I : natural := 0;
+--запись данных одного синхронного счётчика в массив счётчиков размером в Amount_of_bins
+write_to_array: process( clk, One_bin_data, Count_flag, Amount_of_bins, Bin_number)
 begin
-
-  if rising_edge(clk) then
-  end if;
     if  falling_edge(Count_flag)  then --and Count_flag ='0'
       Out_Data(Bin_number) <= One_bin_data;
   end if;
